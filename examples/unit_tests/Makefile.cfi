@@ -1,0 +1,37 @@
+BUILDDIR:=build.cfi
+
+include Makefile.common
+
+IGNORED_FUNCTIONS:=ignored_functions.txt
+
+CFI_PASS?=/usr/lib/picon/libCFI.so
+CFI_PRELINK?=/usr/bin/picon-prelink
+
+OPT?=opt-3.5
+OPTFLAGS:=-load $(CFI_PASS) -cfi -cfi-level=1 -cfi-ignore=$(IGNORED_FUNCTIONS)
+
+
+##############
+_INJECTED:=$(BUILDDIR)/cfi_injected
+
+
+.NOTPARALLEL:
+
+
+$(BUILDDIR)/%.bc: $(SRCDIR)/%.c $(BUILDDIR)
+	$(CC) $(CFLAGS) -c -emit-llvm -o $@ $<
+
+$(BUILDDIR)/%_cfi.bc: $(BUILDDIR)/%.bc $(IGNORED_FUNCTIONS)
+	$(OPT) $(OPTFLAGS) -cfi-prefix=$(basename $@) -S -o $@ $<
+
+$(BUILDDIR)/%.o: $(BUILDDIR)/%_cfi.bc
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(_INJECTED)_%.c: $(BUILDDIR)/%_cfi.bc
+	$(CFI_PRELINK) $(basename $<) > $@
+
+$(_INJECTED)_%.o: $(_INJECTED)_%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILDDIR)/%: $(_INJECTED)_%.o $(BUILDDIR)/%.o
+	$(LD) $(LDFLAGS) -o $@ $^

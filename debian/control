@@ -1,0 +1,38 @@
+Source: picon
+Section: devel
+Priority: optional
+Maintainer: Arnaud Fontaine <arnaud.fontaine@ssi.gouv.fr>
+Build-Depends: debhelper (>= 9), make, cmake, clang-3.5, llvm-3.5-dev, llvm-3.5, python
+Standards-Version: 3.9.6
+Homepage: https://github.com/ANSSI-FR/picon
+
+Package: picon-pass
+Architecture: any
+Depends: ${shlibs:Depends},
+    ${misc:Depends},
+    llvm-3.5, python
+Recommends: clang-3.5 | clang
+Description: Control Flow Integrity protection for LLVM IR (LLVM pass)
+ Picon is an implementation of Control Flow Integrity protection made
+ of two parts. This package contains the LLVM compiler pass to
+ instrument a program to be monitored by picon-monitor in order to
+ inject communication routines and message exchanges with the external
+ picon-monitor.
+
+Package: picon-monitor
+Architecture: any
+Depends: ${shlibs:Depends},
+    ${misc:Depends}
+Description: Control Flow Integrity protection for LLVM IR (monitor)
+ Picon is an implementation of Control Flow Integrity protection made
+ of two parts. This package contains the picon-monitor that monitors a
+ picon-instrumented program to ensure the integrity of its execution
+ flow according to its expected control flow integrity.
+
+Package: picon
+Architecture: any
+Depends: picon, picon-monitor
+Description: Control Flow Integrity protection for LLVM IR (metapackage)
+ Picon is an implementation of Control Flow Integrity protection made
+ of two parts: the picon-pass for program instrumentation, and the
+ picon-monitor for execution monitoring.

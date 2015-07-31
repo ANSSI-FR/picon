@@ -1,0 +1,31 @@
+PROJECTDIR?=../../
+
+BUILDDIR?=build
+
+SRCDIR:=src
+SRC:=$(wildcard $(SRCDIR)/*.c)
+
+CFI_INCLUDE?=/usr/include
+
+CC:=clang
+CFLAGS+=-I$(CFI_INCLUDE)
+CFLAGS+=-Wall -Wextra -Wtype-limits -fstrict-overflow -Wsign-compare -DCFI_DEBUG
+LD:=$(CC)
+
+
+BASENAMES:=$(patsubst $(SRCDIR)/%,%,$(basename $(SRC)))
+TARGETS:=$(addprefix $(BUILDDIR)/,$(BASENAMES))
+MKDIR?=mkdir
+
+
+all: clean $(TARGETS)
+
+clean:
+	$(RM) -r $(BUILDDIR)
+
+$(BUILDDIR):
+	$(MKDIR) -p $@
+
+install:
+
+.PHONY: all clean install $(BUILDDIR)

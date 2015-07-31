@@ -1,0 +1,75 @@
+BUILDDIR:=build.cfi
+
+include Makefile.common
+
+IGNORED_FUNCTIONS:=ignored_functions.txt
+
+CFI_PASS?=/usr/lib/picon/libCFI.so
+CFI_PRELINK?=/usr/bin/picon-prelink
+
+OPT?=opt-3.5
+OPTFLAGS:=-load $(CFI_PASS) -cfi -cfi-level=1 -cfi-ignore=$(IGNORED_FUNCTIONS)
+
+
+##############
+_INJECTED:=$(BUILDDIR)/cfi_injected
+
+
+.NOTPARALLEL:
+
+define build_template_so =
+
+$(BUILDDIR)/$(1).bc: $(SRCDIR)/$(1).c $(BUILDDIR)
+	$(CC) $(CFLAGS) -c -emit-llvm -o "$$@" "$$<"
+
+$(BUILDDIR)/$(1).cfi.bc: $(BUILDDIR)/$(1).bc $(IGNORED_FUNCTIONS)
+	$(OPT) $(OPTFLAGS) -cfi-prefix=$(BUILDDIR)/$(1) -S -o "$$@" "$$<"
+
+$(BUILDDIR)/$(1).o: $(BUILDDIR)/$(1).cfi.bc
+	$(CC) $(CFLAGS) -c -o "$$@" "$$<"
+
+$(_INJECTED)_$(1).c: $(BUILDDIR)/$(1).cfi.bc
+	$(CFI_PRELINK) $(BUILDDIR)/$(1) > "$$@"
+
+$(_INJECTED)_$(1).o: $(_INJECTED)_$(1).c
+	$(CC) $(CFLAGS) -c -o "$$@" "$$<"
+
+$(BUILDDIR)/$(1).so: $(BUILDDIR)/$(1).o $(_INJECTED)_$(1).o 
+	$(LD) $(LDFLAGS) -shared -o $$@ $$^
+
+endef
+
+
+define build_template_bin =
+
+$(_INJECTED)_$(1).c: $($(1)_OBJ:%.o=%.cfi.bc)
+	$(CFI_PRELINK) $(BUILDDIR)/$(1) > "$$@"
+
+$(_INJECTED)_$(1).o: $(_INJECTED)_$(1).c
+	$(CC) $(CFLAGS) -c -o "$$@" "$$<"
+
+$(BUILDDIR)/$(1): $(_INJECTED)_$(1).o $($(1)_OBJ)
+	$(LD) $(LDFLAGS) $($(1)_LDFLAGS) -o $$@ $$^
+
+endef
+
+
+define build_template_o =
+
+$(BUILDDIR)/$(1).bc: $(SRCDIR)/$(1).c | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c -emit-llvm -o "$$@" "$$<"
+
+$(BUILDDIR)/$(1).cfi.bc: $(BUILDDIR)/$(1).bc $(IGNORED_FUNCTIONS)
+	$(OPT) $(OPTFLAGS) -cfi-prefix=$(BUILDDIR)/$(2) -S -o "$$@" "$$<"
+
+$(BUILDDIR)/$(1).o: $(BUILDDIR)/$(1).cfi.bc
+	$(CC) $(CFLAGS) -c -o "$$@" "$$<"
+
+endef
+
+
+
+$(foreach BASENAME_SO,$(BASENAMES_SO),$(eval $(call build_template_so,$(BASENAME_SO))))
+$(foreach SRC,$(main_prog_SRC),$(eval $(call build_template_o,$(SRC:.c=),main_prog)))
+$(foreach BASENAME_BIN,$(BASENAMES_BIN),$(eval $(call build_template_bin,$(BASENAME_BIN))))
+

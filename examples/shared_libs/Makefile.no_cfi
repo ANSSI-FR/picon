@@ -1,0 +1,37 @@
+BUILDDIR:=build.no_cfi
+
+include Makefile.common
+
+
+##############
+
+$(BUILDDIR)/%.o: $(SRCDIR)/%.c | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+define build_template_so =
+
+$(BUILDDIR)/$(1).so: $(BUILDDIR)/$(1).o
+	$(LD) $(LDFLAGS) -shared -o "$$@" "$$<"
+
+endef
+
+define build_template_bin =
+
+$(BUILDDIR)/$(1): $($(1)_OBJ)
+	$(LD) $(LDFLAGS) $($(1)_LDFLAGS) -o "$$@" $$^
+
+endef
+
+
+define build_template_o =
+
+$(BUILDDIR)/$(1).o: $(SRCDIR)/$(1).c | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c -o "$$@" "$$<"
+
+endef
+
+
+$(foreach BASENAME_SO,$(BASENAMES_SO),$(eval $(call build_template_so,$(BASENAME_SO))))
+$(foreach SRC,$(main_prog_SRC),$(eval $(call build_template_o,$(SRC:.c=),main_prog)))
+$(foreach BASENAME_BIN,$(BASENAMES_BIN),$(eval $(call build_template_bin,$(BASENAME_BIN))))
+

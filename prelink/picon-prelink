@@ -1,0 +1,467 @@
+#!/usr/bin/env python
+#   Copyright (C) 2015 ANSSI
+#
+#   This file is part of the Picon project.
+#
+#   This file is free software; you can redistribute it and/or
+#   modify it under the terms of the GNU Lesser General Public
+#   License as published by the Free Software Foundation; either
+#   version 2.1 of the License, or (at your option) any later version.
+#
+#   This file is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#   Lesser General Public License for more details.
+#
+#   You should have received a copy of the GNU Lesser General Public
+#   License along with this file; if not, see
+#   <http://www.gnu.org/licenses/>.
+
+import os
+import re
+import struct
+import sys
+import array
+
+INIT_NAME = "_init_cfi"
+INIT_WRAPPER_NAME = "_init_wrapper"
+FINI_NAME = "_fini_cfi"
+FINI_WRAPPER_NAME = "_fini_wrapper"
+
+TEMPLATE_HEADER = """
+#include <assert.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <picon/shared.h>
+
+#include <picon/injected_code.c>
+
+void __CFI_SET_FDS(int fd_client_to_monitor, int fd_monitor_to_client);
+void __CFI_SET_MODULE_ID(uint16_t m_id);
+
+typedef struct {
+        uint32_t           len;
+        const char * const data;
+} __attribute__((packed)) data_t;
+
+"""
+
+TEMPLATE_MAIN = """
+  int fd_loading_to_monitor;
+  int fd_monitor_to_loading;
+  int fd_client_to_monitor;
+  int fd_monitor_to_client;
+  int err = 0;
+  loading_packet pkt;
+  monitor_to_loading_packet m2l_pkt;
+  char *ptr = NULL, *s;
+
+  s = getenv(ENV_FD_LOADING_TO_MONITOR);
+  assert(s != NULL  && "ENV_FD_LOADING_TO_MONITOR not set");
+  fd_loading_to_monitor = strtol(s, &ptr, 10);
+  assert(ptr != NULL  && "invalid ENV_FD_LOADING_TO_MONITOR");
+  if (fd_loading_to_monitor < 0) abort();
+
+  s = getenv(ENV_FD_MONITOR_TO_LOADING);
+  assert(s != NULL  && "ENV_FD_MONITOR_TO_LOADING not set");
+  fd_monitor_to_loading = strtol(s, &ptr, 10);
+  assert(ptr != NULL  && "invalid ENV_FD_MONITOR_TO_LOADING");
+  if (fd_monitor_to_loading < 0) abort();
+
+  s = getenv(ENV_FD_CLIENT_TO_MONITOR);
+  assert(s != NULL  && "ENV_FD_CLIENT_TO_MONITOR not set");
+  fd_client_to_monitor = strtol(s, &ptr, 10);
+  assert(ptr != NULL  && "invalid ENV_FD_CLIENT_TO_MONITOR");
+  if (fd_client_to_monitor < 0) abort();
+
+  s = getenv(ENV_FD_MONITOR_TO_CLIENT);
+  assert(s != NULL  && "ENV_FD_MONITOR_TO_CLIENT not set");
+  fd_monitor_to_client = strtol(s, &ptr, 10);
+  assert(ptr != NULL  && "invalid ENV_FD_MONITOR_TO_CLIENT");
+  if (fd_monitor_to_client < 0) abort();
+
+  __CFI_SET_FDS(fd_client_to_monitor, fd_monitor_to_client);
+
+  pkt.event=CFI_LOADING_MODULE_BEGIN;
+  pkt.size=sizeof(_s_cfi);
+  pkt.value=(loading_packet_value*)_s_cfi;
+  WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+  if (err) abort();
+
+  READ_MONITOR_TO_LOADING_PACKET(fd_monitor_to_loading,m2l_pkt,err);
+  if (err) abort();
+
+  __CFI_SET_MODULE_ID(m2l_pkt.id);
+
+  pkt.event=CFI_LOADING_SECTION_FUNCTION_ID;
+  pkt.size=sizeof(_s_fctids);
+  pkt.value=(loading_packet_value*)_s_fctids;
+  WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+  if (err) abort();
+
+  pkt.event=CFI_LOADING_SECTION_FUNCTION_TRANSITION;
+  pkt.size=sizeof(_s_callgraph);
+  pkt.value=(loading_packet_value*)_s_callgraph;
+  WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+  if (err) abort();
+
+  
+"""
+
+TEMPLATE_MAIN_TERMINATED = """
+
+  pkt.event=CFI_LOADING_TERMINATED;
+  pkt.size=0;
+  pkt.value=NULL;
+  WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+  if (err) abort();
+"""
+
+TEMPLATE_MAIN_END = """
+
+  pkt.event=CFI_LOADING_MODULE_END;
+  pkt.size=0;
+  pkt.value=NULL;
+  WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+  if (err) abort();
+"""
+
+TEMPLATE_SEND_BB = """
+
+  {
+    uint32_t i, num_fcts;
+    num_fcts = sizeof(_s_bb)/sizeof(_s_bb[0]);
+
+    for (i=0; i<num_fcts; i++) {
+      pkt.event=CFI_LOADING_SECTION_BLOCK_TRANSITION;
+      pkt.size=_s_bb[i].len;
+      pkt.value=(loading_packet_value*)_s_bb[i].data;
+      WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+      if (err) abort();
+    }
+  }
+"""
+
+TEMPLATE_SEND_BB_IPD = """
+
+  pkt.event=CFI_LOADING_SECTION_BLOCK_IPD;
+  pkt.size=sizeof(_s_bb_ipd);
+  pkt.value=(loading_packet_value*)_s_bb_ipd;
+  WRITE_LOADING_PACKET(fd_loading_to_monitor,pkt,err);
+  if (err) abort();
+"""
+
+def print_err(o):
+    sys.stderr.write("%s\n" % o)
+
+def packed_l_uint32(l):
+    s = struct.pack('<'+('I'*len(l)), *l)
+    s = map(lambda c : "\\x%x" % ord(c),s)
+    s = ''.join(s)
+    return s
+
+def packed_dict_uint32(d):
+    s = ''
+    for k in d.keys():
+        l = d[k]
+        s2 = struct.pack('<II'+('I'*len(l)), k, len(l), *l)
+        s = s + ''.join(s2)
+    return s
+
+def parse_fctids(filename):
+    fcts = dict()
+    lines = [line.rstrip() for line in open(filename)]
+    for idx, line in enumerate(lines):
+        (name,s_id,flags) = line.split()
+        i_id = int(s_id)
+        fcts[name] = (i_id,flags)
+    return fcts
+
+def parse_callgraph(filename):
+    callgraph = dict()
+    lines = [line.rstrip() for line in open(filename)]
+    for idx, line in enumerate(lines):
+        ID = int(line.split()[0][1:-1])
+        callees = [int(x) for x in line.split()[1:]]
+        callgraph[ID] = callees
+    return callgraph
+
+def parse_bb(filename):
+    bb = dict()
+    fct_num_blocks = dict()
+    current_fct = None
+    with open(filename,'r') as f:
+        for line in f:
+            line = line.rstrip()
+            if line.startswith(';{'):
+                current_fct = int(line.split()[0][2:-1])
+                num_blocks = int(line.split()[1])
+                fct_num_blocks[current_fct] = num_blocks
+                if current_fct in bb.keys():
+                    sys.stderr.write("BBs for function %d already processed\n" % current_fct)
+                    sys.exit(255)
+                bb[current_fct] = dict()
+            else:
+                if len(line)>0:
+                    ID = int(line.split()[0][1:-1])
+                    next_bbs = [int(x) for x in line.split()[1:]]
+                    bb[current_fct][ID] = next_bbs
+    #print_err(bb)
+    return bb,fct_num_blocks
+
+def parse_bb_ipd(filename):
+    bb_ipd = []
+    with open(filename,'r') as f:
+        for line in f:
+            line = line.rstrip()
+            l_ipd = line.split()
+            l_ipd = map(int,l_ipd)
+            bb_ipd.append(tuple(l_ipd))
+    #print_err(bb_ipd)
+    return bb_ipd
+
+def gen_header():
+    """generate the header of the file
+    """
+    lbuf = []
+    lbuf = lbuf + TEMPLATE_HEADER.split("\n")
+    return '\n'.join(lbuf)
+
+def flag_to_enum(s):
+    if s == 'External':
+        return "FCT_EXTERNAL"
+    elif s == 'Init':
+        return "FCT_INIT"
+    elif s == 'Fini':
+        return "FCT_FINI"
+    elif s == 'Main':
+        return "FCT_MAIN"
+    else:
+        return "FCT_INTERNAL"
+
+def flag_to_int(s):
+    """ WARNING: values must match enum fct_flag_t
+    """
+    if s == 'External':
+        return 1
+    elif s == 'Init':
+        return 2
+    elif s == 'Fini':
+        return 3
+    elif s == 'Main':
+        return 4
+    else:
+        return 0
+
+def gen_packed_cfi(fcts):
+    """generate the packed structure for cfi
+    """
+    lbuf = []
+    s = ''
+    s = struct.pack('<I',len(fcts.keys()))
+    s = map(lambda c : "\\x%.2x" % ord(c),s)
+    s = ''.join(s)
+    n = 64
+    l2 = ['"%s"' % s[i:i+n] for i in range(0,len(s),n)]
+    lbuf.append('static const char _s_cfi[] =')
+    lbuf = lbuf + l2
+    lbuf.append(';\n')
+    return '\n'.join(lbuf)
+
+def gen_packed_fctids(fcts_init):
+    """generate the packed structure for fctids
+    """
+    lbuf = []
+    ## sort functions by ID
+    fct_list = [(ID,fname,flags) for fname,(ID,flags) in fcts_init.iteritems()]
+    fct_list.sort()
+    ## uncomment to insert human-readable structure
+    #lbuf.append("static const fctid_t _fctids[] = {");
+    #lbuf = lbuf + ['  {%d, %s, "%s"},' % (i_id,flag_to_enum(flags),fname) for i_id,fname,flags in fct_list]
+    #lbuf.append('};')
+    s = ''
+    for ID,fname,flags in fct_list:
+        s = s + struct.pack('<II',ID,flag_to_int(flags))
+        s = s + fname + '\0'
+    # prepend (uint32_t) num_functions
+    s = struct.pack('<I',len(fcts_init.keys())) + s
+    s = map(lambda c : "\\x%.2x" % ord(c),s)
+    s = ''.join(s)
+    n = 64
+    l2 = ['"%s"' % s[i:i+n] for i in range(0,len(s),n)]
+    lbuf.append('static const char _s_fctids[] =')
+    lbuf = lbuf + l2
+    lbuf.append(';\n')
+    return '\n'.join(lbuf)
+
+def gen_packed_callgraph(callgraph):
+    """generate the packed structure for callgraph
+    """
+    lbuf = []
+    ## uncomment to insert human-readable structure
+    #lbuf.append("static const callgraph_entry_t _callgraph[] = {");
+    #lbuf = lbuf + ['  {%d, %d, "%s"},' % (ID,len(callees),packed_l_uint32(callees)) for ID,callees in callgraph.iteritems()]
+    #lbuf.append('};')
+    s = ''
+    for ID,callees in callgraph.iteritems():
+        s = s + struct.pack('<II',ID,len(callees))
+        s = s + struct.pack('<'+('I'*len(callees)), *callees)
+    ## prepend (uint32_t) num_callgraph_entries
+    s = struct.pack('<I',len(callgraph.keys())) + s
+    s = map(lambda c : "\\x%.2x" % ord(c),s)
+    s = ''.join(s)
+    n = 64
+    l2 = ['"%s"' % s[i:i+n] for i in range(0,len(s),n)]
+    lbuf.append('static const char _s_callgraph[] =')
+    lbuf = lbuf + l2
+    lbuf.append(';\n')
+    return '\n'.join(lbuf)
+
+def gen_packed_bb(bb, fct_num_blocks):
+    """generate the packed structure for basic blocks
+    """
+    lbuf = []
+    ## uncomment to insert human-readable structure
+    #lbuf.append("static const bb_entry_t _bb[] = {");
+    #   #s2 = map(lambda c : "\\x%x" % ord(c),s2)
+    #lbuf = lbuf + ['  {%d, %d, "%s"},' % (fct_id,len(d), ''.join(map(lambda c : "\\x%x" % ord(c),packed_dict_uint32(d)))) for fct_id,d in bb.iteritems()]
+    #lbuf.append('};')
+    lbuf = []
+    lbuf.append('static const data_t _s_bb[] = {')
+    for fct_id,d in bb.iteritems():
+        s = ''
+        s = s + struct.pack('<III', fct_id, fct_num_blocks[fct_id], len(d.keys()))
+        if len(d.keys()) > 0:
+            s = s + packed_dict_uint32(d)
+
+        length = len(s)
+        s = map(lambda c : "\\x%.2x" % ord(c),s)
+        s = ''.join(s)
+        n = 64
+        l2 = ['"%s"' % s[i:i+n] for i in range(0,len(s),n)]
+        s = '\n'.join(l2)
+        s = '{' + '%d, ' % length + s
+        s = s + '},'
+        lbuf.append(s)
+    lbuf.append('};\n')
+    return '\n'.join(lbuf)
+
+def gen_packed_bb_ipd(bb_ipd):
+    """generate the packed structure for basic blocks / immediate post-dominators
+    """
+    lbuf = []
+    ## uncomment to insert human-readable structure
+    #lbuf.append("static const msg_block_ipd_t _bb_ipd[] = {");
+    #lbuf = lbuf + ['  {{{0[0]}, {0[1]}, {0[2]}, {0[3]}}},'.format(ipd_def) for ipd_def in bb_ipd]
+    #lbuf.append('};')
+    s = ''
+    s = s + struct.pack('<I',len(bb_ipd))
+    for ipd_def in bb_ipd:
+        s = s + struct.pack('<IIII', *ipd_def)
+    s = map(lambda c : "\\x%.2x" % ord(c),s)
+    s = ''.join(s)
+    n = 64
+    l2 = ['"%s"' % s[i:i+n] for i in range(0,len(s),n)]
+    lbuf.append('static const char _s_bb_ipd[] =')
+    lbuf = lbuf + l2
+    lbuf.append(';\n')
+    return '\n'.join(lbuf)
+
+
+def gen_init_wrapper(fcts_init):
+    """generate the wrapper, calling all init functions.
+    """
+    lbuf = []
+    lbuf = lbuf + ["extern void %s (void);" % fname for fname in fcts_init.keys()]
+    lbuf = lbuf + ['void __attribute__((visibility("hidden"))) %s(void) {' % INIT_WRAPPER_NAME]
+    lbuf = lbuf + ["  (void)%s();" % fname for fname in fcts_init.keys()]
+    lbuf.append('}')
+    return '\n'.join(lbuf)
+
+def gen_fini_wrapper(fcts_fini):
+    """generate the wrapper, calling all fini functions.
+    """
+    lbuf = []
+    lbuf = lbuf + ["extern void %s (void);" % fname for fname in fcts_fini.keys()]
+    lbuf = lbuf + ['void __attribute__((visibility("hidden"))) %s(void) {' % FINI_WRAPPER_NAME]
+    lbuf = lbuf + ["  (void)%s();" % fname for fname in fcts_fini.keys()]
+    lbuf.append('}')
+    return '\n'.join(lbuf)
+
+def gen_ctor(fcts, granularity_bb, bb):
+    """generate the real init function,
+       to send tables to monitor then call init wrapper.
+    """
+    lbuf = []
+    lbuf = lbuf + ['static void __attribute__((constructor)) %s(void) {' % INIT_NAME]
+    lbuf = lbuf + TEMPLATE_MAIN.split("\n")
+    if granularity_bb:
+        lbuf = lbuf + TEMPLATE_SEND_BB.split("\n")
+        lbuf = lbuf + TEMPLATE_SEND_BB_IPD.split("\n")
+    lbuf = lbuf + TEMPLATE_MAIN_END.split("\n")
+    if 'main' in fcts.keys():
+        lbuf = lbuf + TEMPLATE_MAIN_TERMINATED.split("\n")
+    lbuf.append("  (void)%s();" % INIT_WRAPPER_NAME)
+    lbuf.append('}')
+    return '\n'.join(lbuf)
+
+def gen_dtor():
+    """generate the real fini function,
+       to call fini wrapper.
+    """
+    lbuf = []
+    lbuf = lbuf + ['static void __attribute__((destructor)) %s(void) {' % FINI_NAME]
+    lbuf.append("  (void)%s();" % FINI_WRAPPER_NAME)
+    lbuf.append('}')
+    return '\n'.join(lbuf)
+
+if __name__ == "__main__":
+    if len(sys.argv)<2:
+        print "missing arguments"
+        print "usage: %s cfi-prefix" % sys.argv[0]
+        sys.exit(1)
+
+    CFI_PREFIX=sys.argv[1]
+    FILENAME_FCTID = CFI_PREFIX + ".fctid"
+    FILENAME_CALLGRAPH = CFI_PREFIX + ".trans"
+    FILENAME_BBTRANS = CFI_PREFIX + ".bbtrans"
+    FILENAME_IPD = CFI_PREFIX + ".ipdom"
+    granularity_bb = False
+    bb = None
+    bb_ipd = None
+    fct_num_blocks = None
+    fct_num_ipd = None
+    if os.path.exists(FILENAME_BBTRANS):
+        granularity_bb = True
+
+    fcts = parse_fctids(FILENAME_FCTID)
+    fcts_init = {k:v for (k,v) in fcts.iteritems() if v[1] == 'Init'}
+    fcts_fini = {k:v for (k,v) in fcts.iteritems() if v[1] == 'Fini'}
+    callgraph = parse_callgraph(FILENAME_CALLGRAPH)
+    if granularity_bb:
+        (bb,fct_num_blocks) = parse_bb(FILENAME_BBTRANS)
+        bb_ipd = parse_bb_ipd(FILENAME_IPD)
+
+    s_hdr = gen_header()
+    s_cfi = gen_packed_cfi(fcts)
+    s_fctids = gen_packed_fctids(fcts)
+    s_callgraph = gen_packed_callgraph(callgraph)
+    if granularity_bb:
+        s_bb = gen_packed_bb(bb, fct_num_blocks)
+        s_bb_ipd = gen_packed_bb_ipd(bb_ipd)
+    s_init_wrapper = gen_init_wrapper(fcts_init)
+    s_fini_wrapper = gen_fini_wrapper(fcts_fini)
+    s_ctor = gen_ctor(fcts, granularity_bb, bb)
+    s_dtor = gen_dtor()
+
+    print s_hdr
+    print s_cfi
+    print s_fctids
+    print s_callgraph
+    if granularity_bb:
+        print s_bb
+        print s_bb_ipd
+    print s_init_wrapper
+    print s_fini_wrapper
+    print s_ctor
+    print s_dtor

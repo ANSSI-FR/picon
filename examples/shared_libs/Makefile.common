@@ -1,0 +1,37 @@
+PROJECTDIR?=../../
+
+BUILDDIR?=build
+
+SRCDIR:=src
+SRC:=$(wildcard $(SRCDIR)/*.c)
+
+CFI_INCLUDE?=/usr/include
+
+CC:=clang
+CFLAGS+=-I$(CFI_INCLUDE)
+CFLAGS+=-Wall -Wextra -Wtype-limits -fstrict-overflow -Wsign-compare -DCFI_DEBUG
+CFLAGS+=-fPIC
+LD:=$(CC)
+
+
+BASENAMES_SO:=libmylib1 libmylib2 libmylib3
+TARGETS_SO:=$(addsuffix .so, $(addprefix $(BUILDDIR)/,$(BASENAMES_SO)))
+BASENAMES_BIN:=main_prog
+TARGETS_BIN:=$(addprefix $(BUILDDIR)/,$(BASENAMES_BIN))
+main_prog_SRC:=main_prog.c file2.c
+main_prog_OBJ:=$(addprefix $(BUILDDIR)/, $(main_prog_SRC:.c=.o))
+main_prog_LDFLAGS:=-L$(BUILDDIR) -lmylib1 -lmylib2 -lmylib3
+
+MKDIR?=mkdir
+
+all: clean $(TARGETS_SO) $(TARGETS_BIN)
+
+clean:
+	$(RM) -r $(BUILDDIR)
+
+$(BUILDDIR):
+	$(MKDIR) $@
+
+install:
+
+.PHONY: all clean install $(BUILDDIR)

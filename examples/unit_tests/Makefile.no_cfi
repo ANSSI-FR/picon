@@ -1,0 +1,15 @@
+BUILDDIR:=build.no_cfi
+
+include Makefile.common
+
+
+##############
+
+
+
+$(BUILDDIR)/%.o: $(SRCDIR)/%.c $(BUILDDIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILDDIR)/%: $(BUILDDIR)/%.o
+	$(LD) $(LDFLAGS) -o $@ $<
+

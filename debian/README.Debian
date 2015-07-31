@@ -1,0 +1,10 @@
+picon for Debian
+----------------
+
+picon-monitor is compiled with timeout feature deactivated. It means
+that picon-monitor will not kill the monitored program if it receives
+no signal from it. To activate this feature you need to rebuild the
+monitor with this feature enabled. Indeed, for security reasons, it
+cannot be enabled/disabled at runtime.
+
+ -- Arnaud Fontaine <arnaud.fontaine@ssi.gouv.fr>  Wed, 29 Jul 2015 15:20:22 +0200
