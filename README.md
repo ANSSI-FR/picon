@@ -49,7 +49,7 @@ The following files can be edited to change or set options:
     * `SILENT` : if set, no output (debug or error) is produced by the
       monitor, even in case of compromission of control flow integrity
       of the monitored program
-    * `DEBUG` : if set, the monitor will display (a lot of) debug
+    * `CFI_DEBUG` : if set, the monitor will display (a lot of) debug
       output
 
 ## Usage
