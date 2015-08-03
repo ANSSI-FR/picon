@@ -537,6 +537,7 @@ void ControlFlowIntegrity::ParseAnnotations(void) {
         report_fatal_error("Cast to ConstantExpr failed", true);
       if (CE->isCast()) {
         FP = CE->getOperand(0);
+        F = dyn_cast_or_null<Function>(FP);
       }
     }
 
