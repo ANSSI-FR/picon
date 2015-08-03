@@ -447,7 +447,7 @@ int monitor_load(const pid_t client_pid,
       terminated = 1;
       err = 0;
     }
-    if(!err) {
+    if(!err && !terminated) {
       err = compute_relocations_of_module(data, data->nb_modules - 1, 0);
       if(!err) {
         const unsigned int nb = data->modules[data->nb_modules - 1].nb_entrypoint_inits;
