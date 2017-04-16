@@ -7,7 +7,7 @@ IGNORED_FUNCTIONS:=ignored_functions.txt
 CFI_PASS?=/usr/lib/picon/libCFI.so
 CFI_PRELINK?=/usr/bin/picon-prelink
 
-OPT?=opt-3.5
+OPT?=opt-3.8
 OPTFLAGS:=-load $(CFI_PASS) -cfi -cfi-level=1 -cfi-ignore=$(IGNORED_FUNCTIONS)
 
 

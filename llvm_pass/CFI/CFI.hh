@@ -1,4 +1,4 @@
-/* Copyright (C) 2015 ANSSI
+/* Copyright (C) 2015-2017 ANSSI
 
    This file is part of the Picon project.
 
@@ -26,6 +26,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"

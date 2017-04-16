@@ -21,7 +21,7 @@ LLVM pass.  A C compiler is required to build the monitor.  Clang is
 also used to build examples, and Python to run the prelink script.
 
 The current code has been developed and tested against
-version 3.5. More recent versions are expected to work, but may
+version 3.8. More recent versions are expected to work, but may
 require some changes to match the changes in LLVM API.
 
 ## Building the project

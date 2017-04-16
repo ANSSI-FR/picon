@@ -1,6 +1,6 @@
 
-export LLVM_CONFIG:=llvm-config-3.5
-export OPT:=opt-3.5
+export LLVM_CONFIG:=llvm-config-3.8
+export OPT:=opt-3.8
 
 
 export MKDIR:=mkdir

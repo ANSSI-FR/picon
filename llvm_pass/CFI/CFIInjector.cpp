@@ -1,4 +1,4 @@
-/* Copyright (C) 2015 ANSSI
+/* Copyright (C) 2015-2017 ANSSI
 
    This file is part of the Picon project.
 
@@ -119,7 +119,7 @@ void injectorCFI::injectPrototype(void) {
 void injectorCFI::injectMentry(Function& F, int FctID) {
   Function *retAddrFct = Intrinsic::getDeclaration(&_M, Intrinsic::returnaddress);
   Value *Zero = ConstantInt::get(Type::getInt32Ty(_M.getContext()), 0);
-  Instruction *EntryPos = F.getEntryBlock().getFirstInsertionPt();
+  Instruction *EntryPos = dyn_cast<Instruction>(F.getEntryBlock().getFirstInsertionPt());
   CallInst *retAddrCall = NULL;
 
   if (retAddrFct != NULL) {

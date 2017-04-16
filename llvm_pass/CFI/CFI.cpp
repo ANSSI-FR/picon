@@ -1,4 +1,4 @@
-/* Copyright (C) 2015 ANSSI
+/* Copyright (C) 2015-2017 ANSSI
 
    This file is part of the Picon project.
 
@@ -38,14 +38,15 @@ ControlFlowIntegrity::ControlFlowIntegrity(Module &M,
                                            const std::string& IgnoredFctFileName)
   : _M(M),
     _FunctionMap(),
-    _IdentifiedFunctions(), _fun_id_ctr(0),
+    _IdentifiedFunctions(),
     _IgnoredFunctions(),
     _InitFunctions(),
     _FiniFunctions(),
     _IgnoredBlocksFunctions(),
     _fun_id_file(fun_id_file),
     _transTableFile(trans_table_file), _transTableBBFile(trans_tablebb_file),
-    _IgnoredFctFileName(IgnoredFctFileName), _ipdom_file(ipdom_file) {
+    _IgnoredFctFileName(IgnoredFctFileName), _ipdom_file(ipdom_file),
+    _fun_id_ctr(0) {
   if (!_IgnoredFctFileName.empty()) {
     std::fstream fs;
     fs.open(_IgnoredFctFileName, std::fstream::in);
@@ -256,6 +257,7 @@ int ControlFlowIntegrity::getIdentifier(Function *F) {
   }
   std::cerr << "getIdentifier out-of-range!\n";
   assert(0 && "Function Identifier out of range!");
+  return -1;
 }
 
 
@@ -457,7 +459,6 @@ void ControlFlowIntegrity::writeIPDOMToFile(CFIModulePass* cfi) {
   for (auto &it : _FunctionMap) {
     CFIFct cfi_f = it.second;
     llvm::Function &F = *cfi_f.fun;
-    uint32_t id = cfi_f.id;
     std::map<llvm::BasicBlock*, uint32_t> &bb_map = cfi_f.bb_map;
 
     if (F.isDeclaration())
@@ -468,9 +469,8 @@ void ControlFlowIntegrity::writeIPDOMToFile(CFIModulePass* cfi) {
       continue;
 
     PostDominatorTree &PDT = cfi->getAnalysis<PostDominatorTree>(F);
-    for (Function::iterator bb = F.begin(), en = F.end(); bb != en; bb++) {
-      BasicBlock *BBI = bb;
-      TerminatorInst* term = (*bb).getTerminator();
+    for (BasicBlock &bb : F) {
+      TerminatorInst* term = (bb).getTerminator();
 
       if (isa<InvokeInst>(term)) {
         report_fatal_error("Invoke Instruction detected!", false);
@@ -479,10 +479,10 @@ void ControlFlowIntegrity::writeIPDOMToFile(CFIModulePass* cfi) {
 
       BasicBlock* posdom = NULL;
       if (term->getNumSuccessors() >= 1) {
-        succ_iterator si = succ_begin(bb);
+        succ_iterator si = succ_begin(&bb);
         posdom = *si;
         si++;
-        for (succ_iterator se = succ_end(bb); si != se; si++) {
+        for (succ_iterator se = succ_end(&bb); si != se; si++) {
           BasicBlock* su2 = *si;
           posdom = PDT.findNearestCommonDominator(posdom, su2);
           if (posdom == NULL)
@@ -490,7 +490,7 @@ void ControlFlowIntegrity::writeIPDOMToFile(CFIModulePass* cfi) {
         }
       }
       IPDOMFS << getIdentifier(&F) << " ";
-      IPDOMFS  << bb_map[&(*bb)] << " ";
+      IPDOMFS  << bb_map[&(bb)] << " ";
       if (posdom != NULL) {
         IPDOMFS  << bb_map[posdom] << " ";
       } else {
